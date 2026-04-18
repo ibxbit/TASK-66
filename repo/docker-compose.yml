@@ -1,0 +1,97 @@
+services:
+  mongo:
+    image: mongo:7
+    container_name: museum_mongo
+    restart: unless-stopped
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: ${MONGO_INITDB_ROOT_USERNAME:-museum_user}
+      MONGO_INITDB_ROOT_PASSWORD: ${MONGO_INITDB_ROOT_PASSWORD:-museum_pass}
+      MONGO_INITDB_DATABASE: ${MONGO_INITDB_DATABASE:-museum_ops}
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongo_data:/data/db
+    healthcheck:
+      test:
+        ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping').ok"]
+      interval: 10s
+      timeout: 5s
+      retries: 8
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: museum_backend
+    restart: unless-stopped
+    depends_on:
+      mongo:
+        condition: service_healthy
+    volumes:
+      - reconciliation_data:/app/reconciliation
+      - ./run_tests.sh:/repo/run_tests.sh:ro
+      - ./unit_tests:/repo/unit_tests:ro
+      - ./API_tests:/repo/API_tests:ro
+      - ./backend:/repo/backend
+      # Frontend sources are mounted read-only so the Docker-contained test run
+      # can exercise frontend-offline and frontend-search-query unit tests
+      # against the real frontend lib (no copy/build needed).
+      - ./frontend:/repo/frontend:ro
+    environment:
+      # NODE_ENV=development enables deterministic dev-user auto-seed on first
+      # DB connect. Override NODE_ENV=production for real deployments (and
+      # disable ENABLE_DEV_SEED).
+      NODE_ENV: ${NODE_ENV:-development}
+      PORT: 8080
+      FRONTEND_ORIGIN: ${FRONTEND_ORIGIN:-http://localhost:5173,http://localhost:8888}
+      ENABLE_SWAGGER: ${ENABLE_SWAGGER:-true}
+      ENABLE_DEV_SEED: ${ENABLE_DEV_SEED:-true}
+      DEV_USER_PASSWORD_YEAR: ${DEV_USER_PASSWORD_YEAR:-2026}
+      SESSION_SECRET: ${SESSION_SECRET:-XDw>VtBh3Rv7c]Iyj{mPMDo*/ZQDo8*D}
+      SESSION_COOKIE_NAME: museum_sid
+      SESSION_COOKIE_SAME_SITE: strict
+      SESSION_COOKIE_SECURE: ${SESSION_COOKIE_SECURE:-false}
+      SESSION_IDLE_TTL_SECONDS: 1800
+      SESSION_ABSOLUTE_TTL_SECONDS: 43200
+      STEP_UP_TTL_MINUTES: 10
+      SEARCH_CACHE_TTL_SECONDS: 600
+      WAITLIST_PROMOTION_EXPIRY_MINUTES: 60
+      INBOX_RETENTION_DAYS: 90
+      REPORT_SCHEDULE_TIMEZONE: ${REPORT_SCHEDULE_TIMEZONE:-America/New_York}
+      REPORT_SCHEDULE_TIME: ${REPORT_SCHEDULE_TIME:-02:00}
+      RECONCILIATION_DIR: /app/reconciliation
+      MONGO_URI: mongodb://${MONGO_INITDB_ROOT_USERNAME:-museum_user}:${MONGO_INITDB_ROOT_PASSWORD:-museum_pass}@mongo:27017/${MONGO_INITDB_DATABASE:-museum_ops}?authSource=admin
+    ports:
+      - "8888:8080"
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://localhost:8080/api/v1/health').then((r)=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
+        ]
+      interval: 15s
+      timeout: 5s
+      retries: 8
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: museum_frontend
+    restart: unless-stopped
+    depends_on:
+      backend:
+        condition: service_healthy
+    ports:
+      - "5173:80"
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://127.0.0.1/"]
+      interval: 20s
+      timeout: 5s
+      retries: 8
+
+volumes:
+  mongo_data:
+  reconciliation_data:

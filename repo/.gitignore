@@ -1,0 +1,46 @@
+# Dependencies & package manager
+node_modules/
+**/node_modules/
+.npm/
+**/.npm/
+
+# Build output
+dist/
+**/dist/
+
+# Caches
+.cache/
+**/.cache/
+
+# Environment & secrets (keep *.env.example tracked)
+.env
+.env.*
+!.env.example
+
+# Logs
+*.log
+
+# Test / coverage artifacts
+coverage/
+**/coverage/
+test-results/
+**/test-results/
+playwright-report/
+blob-report/
+
+# OS
+.DS_Store
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# Editors / IDEs
+.idea/
+*.swp
+*.swo
+*~
+
+# Temporary files
+.tmp/
+temp.cookies
+.git.bak/

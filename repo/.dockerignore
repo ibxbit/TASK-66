@@ -1,0 +1,9 @@
+**/node_modules
+**/.npm
+**/.cache
+**/dist
+**/coverage
+**/npm-debug.log*
+.git
+.gitignore
+.DS_Store

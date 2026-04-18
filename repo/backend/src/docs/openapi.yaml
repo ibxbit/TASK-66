@@ -1,0 +1,1389 @@
+openapi: 3.0.3
+info:
+  title: Philatelic Museum Operations Suite API
+  version: 1.0.0
+  description: |
+    Public HTTP API for museum operations.
+
+    Authentication model:
+    - Session cookie `museum_sid` (set on `POST /auth/login`)
+    - `X-CSRF-Token` required on mutating requests (`POST|PUT|PATCH|DELETE`) except `POST /auth/login`
+    - `X-Step-Up-Token` required on sensitive actions after `POST /auth/step-up`
+
+    Step-up actions:
+    - `GRAPH_PUBLISH`
+    - `ROUTE_RULE_CHANGE`
+    - `JOB_APPROVE`
+    - `JOB_APPEAL_DECIDE`
+    - `EXPORT_CREATE`
+    - `ADMIN_CONFIG_UPDATE`
+servers:
+  - url: http://localhost:8080/api/v1
+tags:
+  - name: Health
+  - name: Auth
+  - name: Users
+  - name: Catalog
+  - name: Graph
+  - name: Venues & Routes
+  - name: Programs
+  - name: Inbox
+  - name: Jobs
+  - name: Analytics
+  - name: Exports
+  - name: Admin
+  - name: Audit
+security:
+  - SessionCookie: []
+paths:
+  /health:
+    get:
+      tags: [Health]
+      summary: Service and database health
+      security: []
+      responses:
+        '200':
+          description: Health payload
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: object
+              example:
+                data:
+                  status: ok
+                  service: backend
+                  sessionCookie:
+                    name: museum_sid
+                    httpOnly: true
+                    secure: false
+                    sameSite: strict
+                    idleTtlSeconds: 1800
+                    absoluteTtlSeconds: 43200
+                  db:
+                    ready: true
+                    connected: true
+                    readyState: 1
+                    lastError: null
+
+  /auth/login:
+    post:
+      tags: [Auth]
+      summary: Login and create authenticated session
+      description: Bootstrap endpoint exempt from CSRF header requirement.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [username, password]
+              properties:
+                username: { type: string }
+                password: { type: string }
+            example:
+              username: curator.dev
+              password: '<your-seeded-password>'
+      responses:
+        '200':
+          description: Authenticated
+          headers:
+            Set-Cookie:
+              schema:
+                type: string
+              description: Session cookie `museum_sid`
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LoginResponse'
+              example:
+                data:
+                  user:
+                    id: 65f0f7d1d5f5f8612f06a001
+                    username: curator.dev
+                    roles: [Curator]
+                  session:
+                    id: x9pR2lD_session
+                    idleExpiresAt: '2026-03-30T10:00:00.000Z'
+                  csrfToken: a7815c8d-2f15-42f1-b8a9-a4ef880d3123
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '401':
+          $ref: '#/components/responses/AuthError'
+
+  /auth/logout:
+    post:
+      tags: [Auth]
+      summary: Logout and destroy session
+      security:
+        - SessionCookie: []
+          CsrfHeader: []
+      responses:
+        '204': { description: Logged out }
+
+  /auth/me:
+    get:
+      tags: [Auth]
+      summary: Current session principal and session metadata
+      responses:
+        '200':
+          description: Current principal
+          content:
+            application/json:
+              schema:
+                type: object
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+
+  /auth/step-up:
+    post:
+      tags: [Auth]
+      summary: Verify credentials and issue one-time action-bound step-up token
+      description: Requires authenticated session and CSRF token.
+      security:
+        - SessionCookie: []
+          CsrfHeader: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [password, action]
+              properties:
+                password: { type: string }
+                action:
+                  type: string
+                  enum: [GRAPH_PUBLISH, ROUTE_RULE_CHANGE, JOB_APPROVE, JOB_APPEAL_DECIDE, EXPORT_CREATE, ADMIN_CONFIG_UPDATE]
+      responses:
+        '200':
+          description: Step-up token issued
+          content:
+            application/json:
+              example:
+                data:
+                  stepUpToken: stp_2fbf4e9f2e5a4d8faea6
+                  action: GRAPH_PUBLISH
+                  validUntil: '2026-03-30T10:10:00.000Z'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '401':
+          $ref: '#/components/responses/AuthError'
+
+  /users:
+    get:
+      tags: [Users]
+      summary: List users (excluding password hashes)
+      description: Requires permission `USERS_ADMIN` (Administrator).
+      responses:
+        '200': { description: User list }
+        '403': { $ref: '#/components/responses/Forbidden' }
+    post:
+      tags: [Users]
+      summary: Create user
+      description: Requires permission `USERS_ADMIN` (Administrator).
+      security:
+        - SessionCookie: []
+          CsrfHeader: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [username, password, roles]
+              properties:
+                username: { type: string }
+                password: { type: string }
+                roles:
+                  type: array
+                  items: { $ref: '#/components/schemas/Role' }
+      responses:
+        '201': { description: User created }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /users/{userId}:
+    patch:
+      tags: [Users]
+      summary: Update user roles/status
+      description: Requires permission `USERS_ADMIN` (Administrator).
+      security:
+        - SessionCookie: []
+          CsrfHeader: []
+      parameters:
+        - $ref: '#/components/parameters/UserId'
+      responses:
+        '200': { description: User updated }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /catalog/search:
+    get:
+      tags: [Catalog]
+      summary: Catalog search
+      description: Publicly accessible search with caching and fuzzy relevance.
+      security: []
+      parameters:
+        - name: q
+          in: query
+          schema: { type: string }
+        - name: page
+          in: query
+          schema: { type: integer, minimum: 1, default: 1 }
+        - name: pageSize
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 50, default: 20 }
+        - name: sort
+          in: query
+          schema:
+            type: string
+            enum: [relevance:desc, title:asc, period:asc]
+        - name: filter[category]
+          in: query
+          schema: { type: string }
+        - name: filter[tags]
+          in: query
+          schema: { type: string }
+        - name: filter[periodId]
+          in: query
+          schema: { type: string }
+        - name: filter[seriesId]
+          in: query
+          schema: { type: string }
+      responses:
+        '200':
+          description: Search results
+          content:
+            application/json:
+              example:
+                data:
+                  - id: 65f0f7d1d5f5f8612f06b111
+                    title: Blue Airmail
+                    catalogNumber: CAT-123
+                    artist: I. Kline
+                    series: Airmail
+                    country: USA
+                    period: 1930s
+                    tags: [airmail, blue]
+                pagination:
+                  page: 1
+                  pageSize: 20
+                  total: 1
+                  totalPages: 1
+                meta:
+                  cache: MISS
+        '400': { $ref: '#/components/responses/ValidationError' }
+
+  /catalog/autocomplete:
+    get:
+      tags: [Catalog]
+      summary: Autocomplete suggestions
+      security: []
+      parameters:
+        - name: q
+          in: query
+          required: true
+          schema: { type: string, minLength: 1, maxLength: 64 }
+        - name: limit
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 15, default: 8 }
+      responses:
+        '200': { description: Suggestions }
+        '400': { $ref: '#/components/responses/ValidationError' }
+
+  /catalog/hot-keywords:
+    get:
+      tags: [Catalog]
+      summary: Active curated hot keywords
+      security: []
+      responses:
+        '200': { description: Keywords }
+    post:
+      tags: [Catalog]
+      summary: Create hot keyword
+      description: Requires `CATALOG_CURATION` (Administrator, Curator).
+      security:
+        - SessionCookie: []
+          CsrfHeader: []
+      responses:
+        '201': { description: Created }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  /catalog/hot-keywords/{keywordId}:
+    patch:
+      tags: [Catalog]
+      summary: Update hot keyword
+      description: Requires `CATALOG_CURATION`.
+      security:
+        - SessionCookie: []
+          CsrfHeader: []
+      parameters:
+        - name: keywordId
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { description: Updated }
+        '404': { $ref: '#/components/responses/NotFound' }
+    delete:
+      tags: [Catalog]
+      summary: Retire hot keyword
+      description: Requires `CATALOG_CURATION`.
+      security:
+        - SessionCookie: []
+          CsrfHeader: []
+      parameters:
+        - name: keywordId
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '204': { description: Retired }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /catalog/items:
+    post:
+      tags: [Catalog]
+      summary: Create catalog item
+      description: Requires `CATALOG_CURATION`.
+      security:
+        - SessionCookie: []
+          CsrfHeader: []
+      responses:
+        '201': { description: Created }
+        '400': { $ref: '#/components/responses/ValidationError' }
+
+  /catalog/items/{itemId}:
+    patch:
+      tags: [Catalog]
+      summary: Update catalog item
+      description: Requires `CATALOG_CURATION`.
+      security:
+        - SessionCookie: []
+          CsrfHeader: []
+      parameters:
+        - name: itemId
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { description: Updated }
+        '404': { $ref: '#/components/responses/NotFound' }
+    delete:
+      tags: [Catalog]
+      summary: Archive catalog item
+      description: Requires `CATALOG_CURATION`.
+      security:
+        - SessionCookie: []
+          CsrfHeader: []
+      parameters:
+        - name: itemId
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '204': { description: Archived }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /graph/versions:
+    get:
+      tags: [Graph]
+      summary: List published graph versions
+      description: Requires `GRAPH_READ`.
+      responses:
+        '200': { description: Versions list }
+
+  /graph/drafts:
+    post:
+      tags: [Graph]
+      summary: Create graph draft
+      description: Requires `GRAPH_DRAFT_EDIT` (Administrator, Curator).
+      security:
+        - SessionCookie: []
+          CsrfHeader: []
+      responses:
+        '201': { description: Draft created }
+
+  /graph/drafts/{draftId}:
+    get:
+      tags: [Graph]
+      summary: Read draft snapshot and validation report
+      description: |
+        Requires `GRAPH_READ`. Unpublished drafts are restricted to Administrator/Curator or draft owner.
+      parameters:
+        - name: draftId
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { description: Draft payload }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /graph/drafts/{draftId}/nodes:
+    post:
+      tags: [Graph]
+      summary: Add node to draft
+      description: Requires `GRAPH_DRAFT_EDIT`.
+      security:
+        - SessionCookie: []
+          CsrfHeader: []
+      parameters:
+        - $ref: '#/components/parameters/DraftId'
+      responses:
+        '201': { description: Node created }
+        '400': { $ref: '#/components/responses/ValidationError' }
+
+  /graph/drafts/{draftId}/nodes/{nodeId}:
+    patch:
+      tags: [Graph]
+      summary: Update node in draft
+      description: Requires `GRAPH_DRAFT_EDIT`.
+      security:
+        - SessionCookie: []
+          CsrfHeader: []
+      parameters:
+        - $ref: '#/components/parameters/DraftId'
+        - name: nodeId
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { description: Node updated }
+        '404': { $ref: '#/components/responses/NotFound' }
+    delete:
+      tags: [Graph]
+      summary: Delete node in draft
+      description: Requires `GRAPH_DRAFT_EDIT`.
+      security:
+        - SessionCookie: []
+          CsrfHeader: []
+      parameters:
+        - $ref: '#/components/parameters/DraftId'
+        - name: nodeId
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '204': { description: Node deleted }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /graph/drafts/{draftId}/edges:
+    post:
+      tags: [Graph]
+      summary: Add edge to draft
+      description: Requires `GRAPH_DRAFT_EDIT`.
+      security:
+        - SessionCookie: []
+          CsrfHeader: []
+      parameters:
+        - $ref: '#/components/parameters/DraftId'
+      responses:
+        '201': { description: Edge created }
+        '400': { $ref: '#/components/responses/ValidationError' }
+
+  /graph/drafts/{draftId}/validate:
+    post:
+      tags: [Graph]
+      summary: Run draft validation
+      description: Requires `GRAPH_DRAFT_EDIT`.
+      security:
+        - SessionCookie: []
+          CsrfHeader: []
+      parameters:
+        - $ref: '#/components/parameters/DraftId'
+      responses:
+        '200':
+          description: Validation report
+          content:
+            application/json:
+              example:
+                data:
+                  status: INVALID
+                  issues:
+                    - code: CONSTRAINT_ALLOWED_TARGET_TYPES
+                      severity: BLOCKING
+                      edgeId: e_a1b2c3d4
+                      message: Edge target type ARTIST is not allowed for relation CREATED_BY
+
+  /graph/drafts/{draftId}/publish:
+    post:
+      tags: [Graph]
+      summary: Publish graph draft
+      description: Requires `GRAPH_PUBLISH` and `X-Step-Up-Token` for action `GRAPH_PUBLISH`.
+      security:
+        - SessionCookie: []
+          CsrfHeader: []
+          StepUpHeader: []
+      parameters:
+        - $ref: '#/components/parameters/DraftId'
+      responses:
+        '200':
+          description: Published
+          content:
+            application/json:
+              example:
+                data:
+                  version: 7
+                  publishedAt: '2026-03-30T10:15:00.000Z'
+        '422':
+          $ref: '#/components/responses/GraphValidationBlocked'
+
+  /venues:
+    post:
+      tags: [Venues & Routes]
+      summary: Create venue
+      description: Requires `VENUE_MANAGE` (Administrator, Exhibit Manager).
+      security:
+        - SessionCookie: []
+          CsrfHeader: []
+      responses:
+        '201': { description: Venue created }
+
+  /venues/{venueId}/halls:
+    post:
+      tags: [Venues & Routes]
+      summary: Create hall
+      description: Requires `VENUE_MANAGE`.
+      security:
+        - SessionCookie: []
+          CsrfHeader: []
+      parameters:
+        - name: venueId
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '201': { description: Hall created }
+
+  /halls/{hallId}/zones:
+    post:
+      tags: [Venues & Routes]
+      summary: Create zone
+      description: Requires `VENUE_MANAGE`.
+      security:
+        - SessionCookie: []
+          CsrfHeader: []
+      parameters:
+        - name: hallId
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '201': { description: Zone created }
+
+  /zones/{zoneId}/display-cases:
+    post:
+      tags: [Venues & Routes]
+      summary: Create display case
+      description: Requires `VENUE_MANAGE`.
+      security:
+        - SessionCookie: []
+          CsrfHeader: []
+      parameters:
+        - name: zoneId
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '201': { description: Display case created }
+
+  /routes:
+    post:
+      tags: [Venues & Routes]
+      summary: Create route definition
+      description: Requires `VENUE_MANAGE`.
+      security:
+        - SessionCookie: []
+          CsrfHeader: []
+      responses:
+        '201': { description: Route created }
+
+  /routes/{routeId}/segments:
+    post:
+      tags: [Venues & Routes]
+      summary: Add route segment
+      description: Requires `VENUE_MANAGE`.
+      security:
+        - SessionCookie: []
+          CsrfHeader: []
+      parameters:
+        - name: routeId
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '201': { description: Segment created }
+        '400': { $ref: '#/components/responses/ValidationError' }
+
+  /routes/{routeId}:
+    patch:
+      tags: [Venues & Routes]
+      summary: Update route rules
+      description: Requires `ROUTE_RULE_CHANGE` and step-up action `ROUTE_RULE_CHANGE`.
+      security:
+        - SessionCookie: []
+          CsrfHeader: []
+          StepUpHeader: []
+      parameters:
+        - name: routeId
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { description: Route updated }
+
+  /routes/{routeId}/itineraries:
+    post:
+      tags: [Venues & Routes]
+      summary: Generate itinerary from route segments
+      description: Requires `VENUE_MANAGE`.
+      security:
+        - SessionCookie: []
+          CsrfHeader: []
+      parameters:
+        - name: routeId
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            example:
+              accessibilityMode: true
+              branchSelections:
+                - fromCaseId: 65f0f7d1d5f5f8612f06c101
+                  toCaseId: 65f0f7d1d5f5f8612f06c102
+      responses:
+        '201':
+          description: Itinerary generated
+          content:
+            application/json:
+              example:
+                data:
+                  itineraryId: iti_8a6c9e11
+                  estimatedWalkMinutes: 7.1
+                  printable:
+                    routeId: rte_10f7ab22
+                    accessibilityMode: true
+                    steps:
+                      - step: 1
+                        segmentType: REQUIRED_NEXT
+                        fromCaseId: '65f0f7d1d5f5f8612f06c101'
+                        toCaseId: '65f0f7d1d5f5f8612f06c102'
+                        dwellMinutes: 4
+                        distanceMeters: 40
+
+  /programs:
+    post:
+      tags: [Programs]
+      summary: Create program
+      description: Requires `PROGRAM_MANAGE` (Administrator, Program Coordinator).
+      security:
+        - SessionCookie: []
+          CsrfHeader: []
+      responses:
+        '201': { description: Program created }
+
+  /coaches:
+    post:
+      tags: [Programs]
+      summary: Create coach profile
+      description: Requires `PROGRAM_MANAGE`.
+      security:
+        - SessionCookie: []
+          CsrfHeader: []
+      responses:
+        '201': { description: Coach created }
+
+  /coaches/{coachId}/availability:
+    post:
+      tags: [Programs]
+      summary: Create coach availability window
+      description: Requires `PROGRAM_MANAGE`.
+      security:
+        - SessionCookie: []
+          CsrfHeader: []
+      parameters:
+        - name: coachId
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '201': { description: Availability created }
+
+  /program-sessions:
+    post:
+      tags: [Programs]
+      summary: Create program session
+      description: Requires `PROGRAM_MANAGE`; enforces coach availability window.
+      security:
+        - SessionCookie: []
+          CsrfHeader: []
+      responses:
+        '201': { description: Session created }
+        '422':
+          description: Coach unavailable
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+
+  /program-sessions/{sessionId}/registrations:
+    post:
+      tags: [Programs]
+      summary: Register participant or waitlist participant
+      description: Requires `PROGRAM_MANAGE`.
+      security:
+        - SessionCookie: []
+          CsrfHeader: []
+      parameters:
+        - name: sessionId
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '201': { description: Registration or waitlist entry created }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /program-sessions/{sessionId}/registrations/{registrationId}/cancel:
+    post:
+      tags: [Programs]
+      summary: Cancel registration
+      description: Requires `PROGRAM_MANAGE`; applies late-cancel policy and optional waitlist promotion.
+      security:
+        - SessionCookie: []
+          CsrfHeader: []
+      parameters:
+        - name: sessionId
+          in: path
+          required: true
+          schema: { type: string }
+        - name: registrationId
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { description: Cancellation outcome }
+
+  /program-sessions/{sessionId}/registrations/{registrationId}/no-show:
+    post:
+      tags: [Programs]
+      summary: Mark registration as no-show
+      description: Requires `PROGRAM_MANAGE`; deducts credits and may promote waitlist.
+      security:
+        - SessionCookie: []
+          CsrfHeader: []
+      parameters:
+        - name: sessionId
+          in: path
+          required: true
+          schema: { type: string }
+        - name: registrationId
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { description: No-show recorded }
+
+  /program-sessions/{sessionId}/waitlist/{entryId}/confirm:
+    post:
+      tags: [Programs]
+      summary: Confirm pending waitlist promotion
+      description: Requires `PROGRAM_MANAGE`.
+      security:
+        - SessionCookie: []
+          CsrfHeader: []
+      parameters:
+        - name: sessionId
+          in: path
+          required: true
+          schema: { type: string }
+        - name: entryId
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { description: Promotion confirmed }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /participants/{participantId}/credits:
+    get:
+      tags: [Programs]
+      summary: Get participant credit ledger
+      description: Requires `PROGRAM_MANAGE`.
+      parameters:
+        - name: participantId
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { description: Credit ledger payload or null }
+
+  /participants/{participantId}/credits/adjustments:
+    post:
+      tags: [Programs]
+      summary: Apply credit adjustment
+      description: Requires `PROGRAM_MANAGE`.
+      security:
+        - SessionCookie: []
+          CsrfHeader: []
+      parameters:
+        - name: participantId
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '201': { description: Adjustment created }
+
+  /inbox/messages:
+    get:
+      tags: [Inbox]
+      summary: List inbox messages for authenticated user
+      description: Requires authenticated session; results are recipient-scoped.
+      parameters:
+        - name: page
+          in: query
+          schema: { type: integer, minimum: 1 }
+        - name: pageSize
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 50 }
+        - name: filter[unread]
+          in: query
+          schema: { type: string, enum: ['true', 'false'] }
+        - name: filter[type]
+          in: query
+          schema: { type: string }
+      responses:
+        '200': { description: Message list }
+
+  /inbox/messages/{messageId}/read:
+    post:
+      tags: [Inbox]
+      summary: Mark inbox message as read
+      security:
+        - SessionCookie: []
+          CsrfHeader: []
+      parameters:
+        - name: messageId
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { description: Read timestamp updated }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /inbox/messages/{messageId}/print:
+    post:
+      tags: [Inbox]
+      summary: Retrieve printable payload for message
+      security:
+        - SessionCookie: []
+          CsrfHeader: []
+      parameters:
+        - name: messageId
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { description: Printable payload }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /jobs:
+    post:
+      tags: [Jobs]
+      summary: Create job draft
+      description: Requires `JOB_EDIT` (Administrator, Employer).
+      security:
+        - SessionCookie: []
+          CsrfHeader: []
+      responses:
+        '201': { description: Draft created }
+
+  /jobs/{jobId}:
+    patch:
+      tags: [Jobs]
+      summary: Edit job draft content
+      description: Requires `JOB_EDIT` plus employer ownership for non-admin users.
+      security:
+        - SessionCookie: []
+          CsrfHeader: []
+      parameters:
+        - name: jobId
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { description: Job updated }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /jobs/{jobId}/submit:
+    post:
+      tags: [Jobs]
+      summary: Submit job for approval
+      description: Requires `JOB_EDIT` plus employer ownership for non-admin users.
+      security:
+        - SessionCookie: []
+          CsrfHeader: []
+      parameters:
+        - name: jobId
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { description: Job moved to pending approval }
+
+  /jobs/{jobId}/approve:
+    post:
+      tags: [Jobs]
+      summary: Approve job and publish
+      description: Requires `JOB_APPROVE` and step-up action `JOB_APPROVE`.
+      security:
+        - SessionCookie: []
+          CsrfHeader: []
+          StepUpHeader: []
+      parameters:
+        - name: jobId
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        content:
+          application/json:
+            example:
+              comment: Approved in workflow
+      responses:
+        '200':
+          description: Approved
+          content:
+            application/json:
+              example:
+                data:
+                  jobId: 65f0f7d1d5f5f8612f06d001
+                  state: PUBLISHED
+
+  /jobs/{jobId}/reject:
+    post:
+      tags: [Jobs]
+      summary: Reject job back to draft
+      description: Requires `JOB_APPROVE`.
+      security:
+        - SessionCookie: []
+          CsrfHeader: []
+      parameters:
+        - name: jobId
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { description: Rejected }
+
+  /jobs/{jobId}/takedown:
+    post:
+      tags: [Jobs]
+      summary: Takedown published job
+      description: Requires `JOB_APPROVE`.
+      security:
+        - SessionCookie: []
+          CsrfHeader: []
+      parameters:
+        - name: jobId
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { description: Takedown recorded }
+
+  /jobs/{jobId}/appeals:
+    post:
+      tags: [Jobs]
+      summary: Submit appeal for takedown
+      description: Requires `JOB_EDIT` plus employer ownership for non-admin users.
+      security:
+        - SessionCookie: []
+          CsrfHeader: []
+      parameters:
+        - name: jobId
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '201': { description: Appeal created }
+
+  /jobs/{jobId}/appeals/{appealId}/decide:
+    post:
+      tags: [Jobs]
+      summary: Decide appeal
+      description: Requires `JOB_APPROVE` and step-up action `JOB_APPEAL_DECIDE`.
+      security:
+        - SessionCookie: []
+          CsrfHeader: []
+          StepUpHeader: []
+      parameters:
+        - name: jobId
+          in: path
+          required: true
+          schema: { type: string }
+        - name: appealId
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            example:
+              decision: APPROVE
+              comment: Reinstated after review
+      responses:
+        '200': { description: Appeal decision recorded }
+
+  /jobs/{jobId}/history:
+    get:
+      tags: [Jobs]
+      summary: Job version/workflow history
+      description: Requires `JOB_READ`; non-admin employers are owner-scoped.
+      parameters:
+        - name: jobId
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { description: Job history payload }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  /analytics/metrics:
+    post:
+      tags: [Analytics]
+      summary: Create metric definition
+      description: Requires `ANALYTICS_METRIC_MANAGE` (Administrator).
+      security:
+        - SessionCookie: []
+          CsrfHeader: []
+      responses:
+        '201': { description: Metric created }
+
+  /analytics/dimensions:
+    post:
+      tags: [Analytics]
+      summary: Create dimension definition
+      description: Requires `ANALYTICS_DIMENSION_MANAGE`.
+      security:
+        - SessionCookie: []
+          CsrfHeader: []
+      responses:
+        '201': { description: Dimension created }
+
+  /analytics/anomaly-rules:
+    post:
+      tags: [Analytics]
+      summary: Create anomaly rule
+      description: Requires `ANALYTICS_METRIC_MANAGE`.
+      security:
+        - SessionCookie: []
+          CsrfHeader: []
+      responses:
+        '201': { description: Rule created }
+
+  /analytics/dashboards:
+    post:
+      tags: [Analytics]
+      summary: Create dashboard definition
+      description: Requires `ANALYTICS_DASHBOARD_MANAGE`.
+      security:
+        - SessionCookie: []
+          CsrfHeader: []
+      responses:
+        '201': { description: Dashboard created }
+
+  /analytics/dashboards/{dashboardId}:
+    get:
+      tags: [Analytics]
+      summary: Get dashboard values and anomaly evaluations
+      description: Requires `ANALYTICS_DASHBOARD_READ`.
+      parameters:
+        - name: dashboardId
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { description: Dashboard payload }
+
+  /analytics/reports:
+    post:
+      tags: [Analytics]
+      summary: Create report definition
+      description: Requires `ANALYTICS_REPORT_MANAGE`.
+      security:
+        - SessionCookie: []
+          CsrfHeader: []
+      responses:
+        '201': { description: Report definition created }
+
+  /analytics/reports/{reportId}/run:
+    post:
+      tags: [Analytics]
+      summary: Trigger report run immediately
+      description: Requires `ANALYTICS_REPORT_MANAGE`.
+      security:
+        - SessionCookie: []
+          CsrfHeader: []
+      parameters:
+        - name: reportId
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { description: Report run result }
+        '500':
+          description: Run failed
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+
+  /analytics/reports/{reportId}/runs:
+    get:
+      tags: [Analytics]
+      summary: List report runs
+      description: Requires `ANALYTICS_REPORT_READ` (Administrator, Auditor).
+      parameters:
+        - name: reportId
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { description: Report runs list }
+
+  /exports:
+    post:
+      tags: [Exports]
+      summary: Queue export job
+      description: Requires `EXPORT_CREATE` and step-up action `EXPORT_CREATE`.
+      security:
+        - SessionCookie: []
+          CsrfHeader: []
+          StepUpHeader: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            example:
+              resource: participants
+              format: CSV
+              filters: {}
+              fields: [name, phone, email, notes]
+      responses:
+        '202':
+          description: Job queued
+          content:
+            application/json:
+              example:
+                data:
+                  exportJobId: exp_9fd3a8e2
+                  status: QUEUED
+
+  /exports/{exportJobId}:
+    get:
+      tags: [Exports]
+      summary: Export job status/details
+      description: |
+        Requires `EXPORT_READ` and object-level authorization.
+        Only requester or Administrator can access the job.
+      parameters:
+        - name: exportJobId
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { description: Export job details }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /admin/config:
+    get:
+      tags: [Admin]
+      summary: Read runtime config summary
+      description: Requires `ANALYTICS_REPORT_MANAGE`.
+      responses:
+        '200': { description: Config summary }
+    patch:
+      tags: [Admin]
+      summary: Update runtime config (not implemented)
+      description: Requires `ANALYTICS_REPORT_MANAGE` and step-up action `ADMIN_CONFIG_UPDATE`.
+      security:
+        - SessionCookie: []
+          CsrfHeader: []
+          StepUpHeader: []
+      responses:
+        '501':
+          description: Not implemented
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+
+  /admin/cache/invalidate:
+    post:
+      tags: [Admin]
+      summary: Invalidate cache scopes
+      description: Requires `CATALOG_CURATION`.
+      security:
+        - SessionCookie: []
+          CsrfHeader: []
+      responses:
+        '200': { description: Invalidation result }
+
+  /admin/reconciliation/artifacts:
+    get:
+      tags: [Admin]
+      summary: List report/export artifacts and checksums
+      description: Requires `RECONCILIATION_READ`.
+      responses:
+        '200': { description: Artifact list }
+
+  /audit/events:
+    get:
+      tags: [Audit]
+      summary: Query immutable audit events
+      description: Requires `AUDIT_READ` (Administrator, Auditor).
+      parameters:
+        - name: page
+          in: query
+          schema: { type: integer, minimum: 1 }
+        - name: pageSize
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 50 }
+        - name: filter[action]
+          in: query
+          schema: { type: string }
+        - name: filter[actorId]
+          in: query
+          schema: { type: string }
+        - name: filter[entityType]
+          in: query
+          schema: { type: string }
+        - name: filter[from]
+          in: query
+          schema: { type: string, format: date-time }
+        - name: filter[to]
+          in: query
+          schema: { type: string, format: date-time }
+      responses:
+        '200': { description: Event list (metadata sanitized) }
+        '400': { $ref: '#/components/responses/ValidationError' }
+
+components:
+  securitySchemes:
+    SessionCookie:
+      type: apiKey
+      in: cookie
+      name: museum_sid
+      description: Session cookie set by `POST /auth/login`.
+    CsrfHeader:
+      type: apiKey
+      in: header
+      name: X-CSRF-Token
+      description: Required on mutating requests except `POST /auth/login`.
+    StepUpHeader:
+      type: apiKey
+      in: header
+      name: X-Step-Up-Token
+      description: One-time action-bound step-up token for sensitive operations.
+  parameters:
+    UserId:
+      name: userId
+      in: path
+      required: true
+      schema: { type: string }
+    DraftId:
+      name: draftId
+      in: path
+      required: true
+      schema: { type: string }
+  schemas:
+    Role:
+      type: string
+      enum:
+        - Administrator
+        - Curator
+        - Exhibit Manager
+        - Program Coordinator
+        - Employer
+        - Reviewer
+        - Auditor
+    LoginResponse:
+      type: object
+      properties:
+        data:
+          type: object
+          properties:
+            user:
+              type: object
+              properties:
+                id: { type: string }
+                username: { type: string }
+                roles:
+                  type: array
+                  items: { $ref: '#/components/schemas/Role' }
+            session:
+              type: object
+              properties:
+                id: { type: string }
+                idleExpiresAt: { type: string, format: date-time }
+            csrfToken: { type: string }
+    ErrorEnvelope:
+      type: object
+      properties:
+        error:
+          type: object
+          required: [code, message, requestId]
+          properties:
+            code: { type: string }
+            message: { type: string }
+            details:
+              oneOf:
+                - type: array
+                  items: { type: object }
+                - type: object
+            requestId: { type: string }
+  responses:
+    ValidationError:
+      description: Validation failed
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+    AuthError:
+      description: Invalid credentials or account lock
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+    Unauthenticated:
+      description: Authentication required or session expired
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+    Forbidden:
+      description: Insufficient role permission or object-level access denied
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+    NotFound:
+      description: Resource not found
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+    Conflict:
+      description: State conflict
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+    GraphValidationBlocked:
+      description: Blocking graph validation issues remain
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorEnvelope' }
