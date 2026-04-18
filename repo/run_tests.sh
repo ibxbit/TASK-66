@@ -13,11 +13,17 @@ API_BASE_URL="http://localhost:${API_PORT}/api/v1"
 # backend container the mongo host is the `mongo` compose service DNS name.
 TEST_MONGO_URI="${TEST_MONGO_URI:-mongodb://museum_user:museum_pass@localhost:27017/museum_ops?authSource=admin}"
 BACKEND_LOG=".test-backend.log"
+MONGO_CONTAINER_NAME="museum_mongo_test_$$"
+MONGO_STARTED_BY_SCRIPT=0
 
 cleanup() {
   if [ -n "${BACKEND_PID:-}" ] && kill -0 "$BACKEND_PID" >/dev/null 2>&1; then
     kill "$BACKEND_PID" >/dev/null 2>&1 || true
     wait "$BACKEND_PID" >/dev/null 2>&1 || true
+  fi
+  if [ "$MONGO_STARTED_BY_SCRIPT" = "1" ]; then
+    echo "==> Tearing down ephemeral MongoDB ($MONGO_CONTAINER_NAME)"
+    docker rm -f "$MONGO_CONTAINER_NAME" >/dev/null 2>&1 || true
   fi
 }
 
@@ -46,13 +52,57 @@ else
   UNIT_STATUS=1
 fi
 
+mongo_reachable() {
+  node -e "const mongoose=require('./backend/node_modules/mongoose');mongoose.connect(process.argv[1],{serverSelectionTimeoutMS:5000}).then(()=>{process.exit(0)}).catch(()=>{process.exit(1)})" "$1" >/dev/null 2>&1
+}
+
+echo "==> Checking MongoDB prerequisite at $TEST_MONGO_URI"
+if ! mongo_reachable "$TEST_MONGO_URI"; then
+  echo "    MongoDB not reachable; attempting to start ephemeral container via Docker."
+  if ! command -v docker >/dev/null 2>&1; then
+    echo "[FAIL] docker CLI not available and MongoDB is not reachable."
+    API_STATUS=1
+    BACKEND_STATUS=1
+  else
+    # Free port 27017 on host if something old is bound there
+    docker rm -f "$MONGO_CONTAINER_NAME" >/dev/null 2>&1 || true
+    if docker run -d --rm \
+        --name "$MONGO_CONTAINER_NAME" \
+        -p 27017:27017 \
+        -e MONGO_INITDB_ROOT_USERNAME=museum_user \
+        -e MONGO_INITDB_ROOT_PASSWORD=museum_pass \
+        -e MONGO_INITDB_DATABASE=museum_ops \
+        mongo:7 >/dev/null 2>&1; then
+      MONGO_STARTED_BY_SCRIPT=1
+      echo "    Ephemeral MongoDB container started: $MONGO_CONTAINER_NAME"
+      echo "    Waiting for MongoDB to accept connections..."
+      READY=0
+      for attempt in $(seq 1 60); do
+        if mongo_reachable "$TEST_MONGO_URI"; then
+          READY=1
+          break
+        fi
+        sleep 2
+      done
+      if [ "$READY" -ne 1 ]; then
+        echo "[FAIL] Ephemeral MongoDB did not become ready within 120s"
+        API_STATUS=1
+        BACKEND_STATUS=1
+      fi
+    else
+      echo "[FAIL] Could not start ephemeral MongoDB container"
+      API_STATUS=1
+      BACKEND_STATUS=1
+    fi
+  fi
+fi
+
 echo "==> Starting local backend for API tests"
 
-if ! node -e "const mongoose=require('./backend/node_modules/mongoose');mongoose.connect(process.argv[1],{serverSelectionTimeoutMS:5000}).then(()=>{process.exit(0)}).catch(()=>{process.exit(1)})" "$TEST_MONGO_URI"; then
+if [ "$BACKEND_STATUS" -ne 0 ] || ! mongo_reachable "$TEST_MONGO_URI"; then
   echo "[FAIL] MongoDB prerequisite is unreachable: $TEST_MONGO_URI"
-  echo "       Start MongoDB, then re-run: bash ./run_tests.sh"
-  echo "       Quick check command:"
-  echo "       node -e \"const mongoose=require('./backend/node_modules/mongoose');mongoose.connect('$TEST_MONGO_URI',{serverSelectionTimeoutMS:5000}).then(()=>{console.log('mongo-ok');process.exit(0)}).catch(e=>{console.error('mongo-fail',e.message);process.exit(1)})\""
+  echo "       Either start MongoDB yourself or ensure the docker CLI is available,"
+  echo "       then re-run: bash ./run_tests.sh"
   API_STATUS=1
   BACKEND_STATUS=1
 else
