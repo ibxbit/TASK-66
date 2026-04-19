@@ -48,6 +48,12 @@ if [ "$BACKEND_REUSE" = "0" ]; then
   fi
 fi
 
+# Install backend dependencies if missing (needed in host/CI environments outside Docker)
+if [ ! -d "$ROOT_DIR/backend/node_modules" ]; then
+  echo "==> Installing backend dependencies (backend/node_modules not found)"
+  npm ci --prefix "$ROOT_DIR/backend" --no-audit --no-fund
+fi
+
 echo "==> Running unit tests"
 if node --test unit_tests/*.test.js; then
   echo "[PASS] unit_tests"
@@ -58,7 +64,17 @@ else
 fi
 
 mongo_reachable() {
-  node -e "const mongoose=require('./backend/node_modules/mongoose');mongoose.connect(process.argv[1],{serverSelectionTimeoutMS:5000}).then(()=>{process.exit(0)}).catch(()=>{process.exit(1)})" "$1" >/dev/null 2>&1
+  node -e "
+const net=require('net');
+const url=require('url');
+const u=new url.URL(process.argv[1]);
+const host=u.hostname||'localhost';
+const port=parseInt(u.port||'27017',10);
+const s=net.createConnection({host,port,timeout:5000});
+s.on('connect',()=>{s.destroy();process.exit(0);});
+s.on('error',()=>{process.exit(1);});
+s.on('timeout',()=>{s.destroy();process.exit(1);});
+" "$1" >/dev/null 2>&1
 }
 
 echo "==> Checking MongoDB prerequisite at $TEST_MONGO_URI"
