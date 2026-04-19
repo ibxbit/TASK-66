@@ -6,8 +6,9 @@ RUN apk add --no-cache bash curl
 
 WORKDIR /app
 
-COPY package.json ./
-COPY node_modules ./node_modules
+# Copy manifests first so this layer is cached unless dependencies change
+COPY package.json package-lock.json ./
+RUN npm ci --omit=dev
 
 COPY src ./src
 
