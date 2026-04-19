@@ -7,11 +7,12 @@ cd "$ROOT_DIR"
 UNIT_STATUS=0
 API_STATUS=0
 BACKEND_STATUS=0
+BACKEND_REUSE=0
 API_PORT="${TEST_API_PORT:-28080}"
 API_BASE_URL="http://localhost:${API_PORT}/api/v1"
 # TEST_MONGO_URI can be overridden by the environment; inside the Docker
 # backend container the mongo host is the `mongo` compose service DNS name.
-TEST_MONGO_URI="${TEST_MONGO_URI:-mongodb://museum_user:museum_pass@localhost:27017/museum_ops?authSource=admin}"
+TEST_MONGO_URI="${TEST_MONGO_URI:-${MONGO_URI:-mongodb://museum_user:museum_pass@localhost:27017/museum_ops?authSource=admin}}"
 BACKEND_LOG=".test-backend.log"
 MONGO_CONTAINER_NAME="museum_mongo_test_$$"
 MONGO_STARTED_BY_SCRIPT=0
@@ -29,19 +30,23 @@ cleanup() {
 
 trap cleanup EXIT
 
-# Cleanup any lingering backend processes
-echo "==> Cleaning up port 28080 (if needed)"
-if [[ "$OSTYPE" == "msys" || "$OSTYPE" == "win32" ]]; then
-  powershell.exe -Command "Get-NetTCPConnection -LocalPort 28080 -ErrorAction SilentlyContinue | Select-Object -ExpandProperty OwningProcess | ForEach-Object { Stop-Process -Id \$_ -Force -ErrorAction SilentlyContinue }"
-else
-  fuser -k 28080/tcp > /dev/null 2>&1 || true
+# If a backend is already serving on API_PORT (e.g. the container's own server),
+# reuse it and skip port-cleanup so we don't kill the main process.
+if curl -fsS "$API_BASE_URL/health" >/dev/null 2>&1; then
+  echo "==> Backend already running at $API_BASE_URL — reusing"
+  BACKEND_REUSE=1
+  BACKEND_STATUS=0
 fi
 
-echo "==> Installing backend test dependencies (if needed)"
-cd backend && npm install --no-audit --no-fund >/dev/null 2>&1 && cd .. || {
-  echo "[FAIL] Could not install backend dependencies"
-  exit 1
-}
+if [ "$BACKEND_REUSE" = "0" ]; then
+  # Cleanup any lingering backend processes on API_PORT
+  echo "==> Cleaning up port $API_PORT (if needed)"
+  if [[ "$OSTYPE" == "msys" || "$OSTYPE" == "win32" ]]; then
+    powershell.exe -Command "Get-NetTCPConnection -LocalPort ${API_PORT} -ErrorAction SilentlyContinue | Select-Object -ExpandProperty OwningProcess | ForEach-Object { Stop-Process -Id \$_ -Force -ErrorAction SilentlyContinue }"
+  else
+    fuser -k "${API_PORT}/tcp" > /dev/null 2>&1 || true
+  fi
+fi
 
 echo "==> Running unit tests"
 if node --test unit_tests/*.test.js; then
@@ -97,6 +102,7 @@ if ! mongo_reachable "$TEST_MONGO_URI"; then
   fi
 fi
 
+if [ "$BACKEND_REUSE" = "0" ]; then
 echo "==> Starting local backend for API tests"
 
 if [ "$BACKEND_STATUS" -ne 0 ] || ! mongo_reachable "$TEST_MONGO_URI"; then
@@ -118,6 +124,7 @@ for attempt in $(seq 1 40); do
   BACKEND_STATUS=1
 done
 
+fi
 fi
 
 if [ "$BACKEND_STATUS" -ne 0 ]; then

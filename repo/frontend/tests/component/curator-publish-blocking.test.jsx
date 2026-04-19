@@ -79,7 +79,7 @@ describe('CuratorTab publish blocking', () => {
 
     await user.click(screen.getByRole('button', { name: 'Create Draft' }));
     await waitFor(() => {
-      expect(screen.getByText(/Draft: draft_1/)).toBeTruthy();
+      expect(screen.getAllByText(/Draft: draft_1/).length).toBeGreaterThan(0);
     });
 
     const publishBtn = screen.getByRole('button', { name: /Publish/ });
@@ -137,7 +137,7 @@ describe('CuratorTab publish blocking', () => {
 
     await user.click(screen.getByRole('button', { name: 'Create Draft' }));
     await waitFor(() => {
-      expect(screen.getByText(/Draft: draft_2/)).toBeTruthy();
+      expect(screen.getAllByText(/Draft: draft_2/).length).toBeGreaterThan(0);
     });
 
     await user.click(screen.getByRole('button', { name: 'Validate Draft' }));

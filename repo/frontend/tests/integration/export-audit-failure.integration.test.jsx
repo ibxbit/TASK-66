@@ -83,15 +83,19 @@ describe('Export and audit sequential failure UX', () => {
 
     await user.click(screen.getByRole('button', { name: 'Exports' }));
 
+    // Type the step-up password first so the first network call can proceed
+    await user.type(screen.getByPlaceholderText('step-up password'), 'AdminSecure!2026');
+
+    // First click: step-up call 1 → 401 → error shown
     await user.click(screen.getByRole('button', { name: 'Request Export (Step-Up)' }));
     await waitFor(() => {
-      expect(screen.getByText(/Step-up password incorrect|Enter step-up password/)).toBeTruthy();
+      expect(screen.getByText(/Step-up password incorrect/)).toBeTruthy();
     });
 
-    await user.type(screen.getByPlaceholderText('step-up password'), 'AdminSecure!2026');
+    // Second click: step-up call 2 → 200 → export created
     await user.click(screen.getByRole('button', { name: 'Request Export (Step-Up)' }));
     await waitFor(() => {
-      expect(screen.getByText(/exp_fail_1/)).toBeTruthy();
+      expect(screen.getAllByText(/exp_fail_1/).length).toBeGreaterThan(0);
     });
 
     await user.click(screen.getByRole('button', { name: 'Refresh Job Status' }));

@@ -4,26 +4,42 @@ Self-contained React frontend for the Philatelic Museum Operations Suite. This p
 
 ## Quick Start
 
+All dependency installation must happen inside Docker containers — do not run `npm install` on the host.
+
+Build and serve the frontend via Docker Compose (canonical path):
+
 ```bash
-npm install
-npm run build         # Production bundle → dist/
-npm run preview       # Serve production build at http://localhost:4173
-npm run dev           # Dev server with HMR at http://localhost:5173
+docker-compose build frontend
+docker-compose up -d frontend
+```
+
+For one-off container-based builds or dev server runs, use a temporary node container:
+
+```bash
+# Production bundle
+docker run --rm -v "$(pwd):/app" -w /app node:20-alpine sh -c "npm ci && npm run build"
+
+# Dev server with HMR at http://localhost:5173
+docker run --rm -p 5173:5173 -v "$(pwd):/app" -w /app node:20-alpine sh -c "npm ci && npm run dev -- --host"
 ```
 
 No backend or database is required for build or test workflows.
 
 ## Running Tests
 
-All tests use mocked API responses and run entirely in-process.
+All tests use mocked API responses and run entirely in-process. Run them inside a container — no host Node.js installation required.
 
 ```bash
-npm run test:unit         # Node.js native test runner (validators, security, RBAC)
-npm run test:component    # Vitest + jsdom (component render/interaction)
-npm run test:integration  # Vitest + jsdom (multi-step workflow flows)
-npm run test:frontend     # All three suites sequentially
-npm run test:e2e:setup    # Install Playwright chromium (once)
-npm run test:e2e          # Playwright browser-level E2E specs
+# All frontend suites (unit + component + integration)
+docker run --rm -v "$(pwd):/app" -w /app node:20-alpine sh -c "npm ci && npm run test:frontend"
+
+# Individual suites
+docker run --rm -v "$(pwd):/app" -w /app node:20-alpine sh -c "npm ci && npm run test:unit"
+docker run --rm -v "$(pwd):/app" -w /app node:20-alpine sh -c "npm ci && npm run test:component"
+docker run --rm -v "$(pwd):/app" -w /app node:20-alpine sh -c "npm ci && npm run test:integration"
+
+# E2E (Playwright — requires chromium install step inside the container)
+docker run --rm -v "$(pwd):/app" -w /app mcr.microsoft.com/playwright:v1.44.0-jammy sh -c "npm ci && npm run test:e2e"
 ```
 
 ## Architecture

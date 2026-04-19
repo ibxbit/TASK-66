@@ -117,14 +117,15 @@ describe('SearchDiscoveryTab', () => {
     await waitFor(() => {
       expect(screen.getByText('Boundary Result')).toBeTruthy();
     });
-    expect(apiRequest).toHaveBeenCalledTimes(1);
-    expect(apiRequest.mock.calls[0][0].query.pageSize).toBe(51);
+    const searchCalls = () => apiRequest.mock.calls.filter(([req]) => req.path === '/catalog/search');
+    expect(searchCalls().length).toBe(1);
+    expect(searchCalls()[0][0].query.pageSize).toBe(51);
 
     await user.clear(pageSizeInput);
     await user.type(pageSizeInput, '52');
     await user.click(screen.getByRole('button', { name: 'Search' }));
     expect(screen.getByText('Page size cannot exceed 51.')).toBeTruthy();
-    expect(apiRequest).toHaveBeenCalledTimes(1);
+    expect(searchCalls().length).toBe(1);
   });
 
   it('shows queued message for hot-keyword creation when offline', async () => {
