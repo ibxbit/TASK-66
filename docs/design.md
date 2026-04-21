@@ -16,7 +16,7 @@ Architecture:
 - Data: MongoDB for operational data, immutable audit logs, search cache TTL collections, and report metadata.
 - Filesystem (local managed folder): report artifacts and export artifacts with checksums.
 
-No explicit conflicts were found between `docs/prompt.txt` and `docs/questions.md`; design decisions follow the Q&A resolutions where requirements were ambiguous.
+No explicit conflicts were found between `docs/questions.md` and the design; design decisions follow the Q&A resolutions where requirements were ambiguous.
 
 ## 2. Actors and Roles
 
