@@ -4,6 +4,13 @@ set -u
 ROOT_DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$ROOT_DIR"
 
+# If not already inside a Docker container, delegate execution to the backend container.
+if [ ! -f /.dockerenv ]; then
+  echo "==> Not running inside Docker — delegating to backend container"
+  MSYS_NO_PATHCONV=1 docker compose exec backend bash //repo/run_tests.sh
+  exit $?
+fi
+
 UNIT_STATUS=0
 API_STATUS=0
 BACKEND_STATUS=0

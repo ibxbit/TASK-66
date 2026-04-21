@@ -273,7 +273,7 @@ All backend endpoints are covered by HTTP tests that call `fetch(${API_BASE}${pa
 - Integration boundaries: true HTTP exercised against running backend and real DB URI expectations; degraded DB readiness is explicitly tested (`repo/API_tests/runtime-readiness.test.js:94`).
 - Over-mocking risk: low in backend API tests; moderate-high in frontend integration/e2e mock suites.
 - `run_tests.sh` check: **FLAG (local dependency path present)**
-  - Script performs `npm install` and local backend startup (`repo/run_tests.sh:35`, `repo/run_tests.sh:59`) and expects reachable Mongo URI (`repo/run_tests.sh:14`, `repo/run_tests.sh:51`).
+  - Script performs `npm install` and local backend startup (`repo/run_tests.sh:61`, `repo/run_tests.sh:138`) and expects reachable Mongo URI (`repo/run_tests.sh:22`, `repo/run_tests.sh:59`).
   - Docker execution is possible (`docker-compose exec backend ...`) but script is not Docker-enforced by itself.
 
 ## End-to-End Expectations (Fullstack)
@@ -304,7 +304,7 @@ All backend endpoints are covered by HTTP tests that call `fetch(${API_BASE}${pa
 
 ## Key Gaps
 
-1. `run_tests.sh` includes local install/startup assumptions; not strict Docker-only orchestration (`repo/run_tests.sh:35`, `repo/run_tests.sh:59`).
+1. `run_tests.sh` includes local install/startup assumptions; not strict Docker-only orchestration (`repo/run_tests.sh:61`, `repo/run_tests.sh:138`).
 2. Real browser FE↔BE tests exist but are not in default test runner path (`repo/frontend/tests/e2e-real/real-fe-be.spec.js:1`).
 3. Some frontend critical UI modules lack direct unit/component tests (Auth/graph visualization/support components).
 
